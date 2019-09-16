@@ -1,0 +1,343 @@
+---
+title: "Analysis: How the nation’s growing racial diversity is changing our schools"
+author: "Kate Rabinowitz"
+date: "9/16/2019"
+output: html_document
+---
+
+```{r setup, warning=F, message=F}
+require(tidyverse)
+require(classInt)
+require(stringr)
+```
+In 2020, there will be more children of color than white children. This analysis uses student data to explore how the changing demographics of the county are impacting our schools. 
+
+
+First, we read in and clean up the 2016-2017 school year data. School and student data is from the National Center of Education Statistics (NCES). It can be downloaded here: https://nces.ed.gov/ccd/ccddata.asp. We also used a rural/urban classification from NCES that can be downloaded here: https://nces.ed.gov/programs/edge/Geographic/LocaleBoundaries. To best identify school districts to include in our analysis, we used a list provided by [EdBuild](https://edbuild.org/).
+```{r warning=F, message=F, echo=FALSE}
+### establish school population ###
+### establish school population ###
+### establish school population ###
+schools_raw <- read.csv("./raw/common_core_school_directory.csv", stringsAsFactors = FALSE, strip.white = TRUE, encoding="UTF-8", colClasses = rep("character", 65))
+
+# regular, non-charter grade schools w/in U.S. states and D.C.
+schools_reg <- schools_raw %>% 
+  filter(SCH_TYPE_TEXT == "Regular School" & CHARTER_TEXT != "Yes" & NOGRADES != "Yes" & 
+                                  !(LEVEL %in% c("Ungraded", "Adult Education")) &
+                                  !(SY_STATUS_TEXT %in% c("Closed", "Inactive")) &
+                                  !(ST %in% c("AS", "BI", "DA", "GU", "PR", "VI", "MP")))
+
+# filtering from EdBuild
+ed_build <- read.csv("./raw/sds_data_2016.csv", 
+                     stringsAsFactors = FALSE, strip.white = TRUE, encoding="UTF-8", colClasses = rep("character", 25))
+
+# remove districts not included in EdBuild analysis
+no_ed_build <- schools_reg %>% 
+  filter(!(LEAID %in% ed_build$NCESID)) %>% 
+                            # school districts that we've checked and feel should be included in analysis despite not being in EdBuild's database
+  filter(!(LEA_NAME %in% c("Detroit Public Schools Community District", "Education Achievement Authority of Michigan", "SOUTH HUNTERDON REGIONAL SCHOOL DISTRICT",
+                           "Jefferson Township Local", "Alabaster City", "Pelham City", "GENEVA NORTH SCHOOL", "KEARNEY WEST HIGH SCHOOL",
+                           "Prospect Mountain School District", "Middleton School District", "JACKSONVILLE NORTH PULASKI SCHOOL DISTRICT"))) %>%
+                           # these california school districts are split into upper/lower in our data, unified in EdBuild
+                           filter(!grepl("Santa Rosa|Santa Cruz|Petaluma|Modesto City|Point Area|Arena Union Elementary|Point Arena Joint Union High|Upper Lake",LEA_NAME)) %>%
+                           # nyc is coded as new york public schools in edBuild
+                           filter(!grepl("NEW YORK CITY GEOGRAPHIC DISTRIC", LEA_NAME)) %>%
+                           # vermont also differently grouped
+                           filter(ST != "VT")
+
+schools_reg <- schools_reg %>% mutate(SCH_NAME = tolower(SCH_NAME), LEA_NAME = tolower(LEA_NAME)) %>% filter(!(LEAID %in% no_ed_build$LEAID)) %>% 
+                               # take out these specialized schools and school districts
+                               filter(!grepl("correctional|penitentiary|correction|deaf|detention|virtual|online|community college|military|juvenile| arts |governor' school", LEA_NAME)) %>% 
+                               filter(!grepl("charter school|academy charter|briarmeadow charter|correctional|penitentiary|correction|deaf|blind|detention|virtual|online", SCH_NAME)) %>%
+                               dplyr::select(NCESSCH, LEVEL, LEA_NAME)
+
+# read in student counts
+students_raw <- read.csv("./raw/common_core_membership1617.csv", stringsAsFactors = FALSE, strip.white = TRUE, colClasses = c(rep("character", 15), "numeric", rep("character", 2)))
+
+students <- left_join(schools_reg, students_raw, by="NCESSCH") %>% 
+  filter(!(GRADE %in% c("Adult Education")) &
+         TOTAL_INDICATOR %in% c("Category Set A - By Race/Ethnicity; Sex; Grade") & 
+         DMS_FLAG != "Not reported") %>%
+  mutate(SCHOOL_YEAR = "2016-2017", SCH_NAME = tolower(str_trim(SCH_NAME)))
+
+# take out virtual schools
+school_virtual <- read.csv("./raw/ccd_sch_129_1617_w_1a_11212017 2.csv",stringsAsFactors = FALSE, strip.white = TRUE, colClasses = c(rep("character", 20)))[c(11, 20)]
+
+students <- left_join(students, school_virtual, by="NCESSCH") %>% 
+  filter(!(VIRTUAL_TEXT %in% c("Full Virtual", "Virtual with face to face options"))) %>%
+  select(-VIRTUAL_TEXT)
+
+# create race counts
+studentsRace_sch <- students %>% 
+  group_by(SCHOOL_YEAR, ST, SCH_NAME, LEVEL, LEAID, LEA_NAME, NCESSCH, RACE_ETHNICITY) %>% 
+  summarise(STUDENT_COUNT = sum(STUDENT_COUNT)) %>%
+  ungroup() %>%
+  mutate(RACE_ETHNICITY = case_when(RACE_ETHNICITY == "American Indian or Alaska Native" ~ "AIAN",
+                                    RACE_ETHNICITY == "Asian" ~ "Asian",
+                                    RACE_ETHNICITY == "Black or African American" ~ "Black",
+                                    RACE_ETHNICITY == "Hispanic/Latino" ~ "Hispanic",
+                                    RACE_ETHNICITY == "Native Hawaiian or Other Pacific Islander" ~ "NHPI",
+                                    RACE_ETHNICITY == "Not Specified" ~ "Not_spec",
+                                    RACE_ETHNICITY == "Two or more races" ~ "Multi",
+                                    RACE_ETHNICITY == "White" ~ "White"))
+
+studentsRace <- studentsRace_sch %>% 
+  spread(RACE_ETHNICITY, STUDENT_COUNT) %>%
+  mutate_all(funs(ifelse(is.na(.), 0, .))) %>%
+  # no districts have unreported race in this time period, so we can just sum for total
+  mutate(Total = White + NHPI + Multi + Hispanic + Black + Asian + AIAN, 
+                 Nonwhite = Total - White) %>%
+  filter(Total > 0)
+
+# add urban/rural classification
+school_loc <- read.csv("./raw/Public_School_Locations_201617.csv", stringsAsFactors = FALSE,
+                       colClasses = c(rep("character", 27)))
+
+urban_rural <- left_join(studentsRace, school_loc %>% select(NCESSCH, LOCALE), by="NCESSCH")
+
+urban_rural <- urban_rural %>% 
+  mutate(LOCALE_TXT = case_when(
+    LOCALE == "11" ~ "city-large",
+    LOCALE == "12" ~ "city-midsize",
+    LOCALE == "13" ~ "city-small", 
+    LOCALE == "21" ~ "suburban-large",
+    LOCALE == "22" ~ "suburban-midsize",
+    LOCALE == "23" ~ "suburban-small",
+    LOCALE == "31" ~ "town-fringe",
+    LOCALE == "32" ~ "town-distant",
+    LOCALE == "33" ~ "town-remote",
+    LOCALE == "41" ~ "rural-fringe", 
+    LOCALE == "42" ~ "rural-distant", 
+    LOCALE == "43" ~ "rural-remote"))
+
+# urban/rural classifications in data are at the school level 
+# here we aggregate to the district level and apply the majority classification to the district
+district_sum <- urban_rural %>%
+  group_by(LEAID, LOCALE_TXT, LOCALE) %>%
+  summarise(pop = sum(Total)) %>%
+  group_by(LEAID) %>%
+  arrange(LEAID, desc(pop)) %>%
+  slice(1) %>%
+  select(-pop) %>%
+  rename(d_Locale = LOCALE, 
+         d_Locale_Txt = LOCALE_TXT)
+
+schools1617 <- left_join(studentsRace, district_sum, by="LEAID")
+``` 
+
+Then we read in the 1994-1995 data, which, of course, has a totally different format. It can be downloaded here: https://nces.ed.gov/ccd/ccddata.asp. No locale classification or EdBuild data here. We filtered out schools and districts based on name. Charters and virtuals were also way less common back then. We backfilled locale classifications. Some places have likely suburbanized over time, but we only refer to the classifications in present day.
+```{r warning=F, message=F, echo=FALSE}
+key <- read.delim("./raw/ed9495_key.txt", sep="\t", header = TRUE, stringsAsFactors = FALSE) %>% 
+        mutate_at(vars(Keep), funs(ifelse(.==0, -1, .))) %>% 
+        mutate(NewLength = Length*Keep) 
+
+widths <- key$NewLength
+names <- key$Name[key$Keep == 1]
+data1 <- read.fwf("./raw/SCH94AI.dat", header=FALSE, col.names = names, widths = widths, stringsAsFactors = FALSE,
+                strip.white = TRUE, comment.char="", colClasses = c(rep("character", 12)))
+data2 <- read.fwf("./raw/SCH94KN.dat", header=FALSE, col.names = names, widths = widths, stringsAsFactors = FALSE,
+                  strip.white = TRUE, comment.char="", colClasses = c(rep("character", 12)))
+data3 <- read.fwf("./raw/SCH94OW.dat", header=FALSE, col.names = names, widths = widths, stringsAsFactors = FALSE,
+                  strip.white = TRUE, comment.char="", colClasses = c(rep("character", 12)))
+
+data <- bind_rows(data1, data2, data3)
+
+schools9495 <- data %>% 
+            mutate(FIPST = str_sub(NCESSCH, 1, 2), LEAID = str_sub(NCESSCH, 1, 7), SCHOOL_YEAR="1994-1995") %>%
+            rename(AIAN=IND94, Asian=ASIAN94, Black=BLACK94, Hispanic=HISP94, White=WHITE94, Total=MEMBER94, 
+                   TotalKnownRace=TOTETH94, ST=ST94, SCH_NAME=SCHNAM94, LEA_NAME=LEANM94) %>% 
+            rename_at(vars(KG94:G1294), funs(gsub("94", "", .))) %>%
+            mutate(SCH_NAME = tolower(SCH_NAME), LEA_NAME = tolower(LEA_NAME)) %>% 
+            filter(!(ST %in% c("AA", "AE", "AS", "BI", "DA", "GU", "PR", "VI", "AP", "MP"))) %>% 
+            filter(!grepl("correctional|penitentiary|correction|deaf|blind|detention|virtual|online|community college|military|juvenile| arts |governor' school", LEA_NAME)) %>% 
+            filter(!grepl("charter school|academy charter|briarmeadow charter|correctional|penitentiary|correction|deaf|blind|detention|virtual|online", SCH_NAME)) %>%
+            mutate_at(vars(AIAN, Asian, Black, Hispanic, White, Total, TotalKnownRace), funs(as.numeric(.))) %>%
+            filter(Total > 0) %>%
+            mutate_at(vars(Total), funs(ifelse(Total < TotalKnownRace, TotalKnownRace, Total))) %>% 
+            mutate(Nonwhite = AIAN+Asian+Black+Hispanic, Not_spec=Total-TotalKnownRace) %>% 
+            select(SCHOOL_YEAR, ST, SCH_NAME, LEAID, LEA_NAME, NCESSCH, AIAN, Asian, Black, Hispanic, Not_spec, White, Total, TotalKnownRace, Nonwhite) %>% 
+            arrange(ST, SCH_NAME)
+```
+
+Finally we can get to the *analysis*. 
+```{r warning=F, message=F}
+### combine and clean data ###
+### combine and clean data ###
+### combine and clean data ###
+schools_raw <- bind_rows(schools9495, schools1617) %>% 
+  filter(Total > 0) %>% 
+  select(SCHOOL_YEAR, ST, SCH_NAME, LEAID, LEA_NAME, d_Locale_Txt, NCESSCH, AIAN:Hispanic, 
+         White, Nonwhite, Multi, NHPI, Not_spec, TotalKnownRace, Total) %>%
+  mutate(LEA_NAME = tolower(LEA_NAME)) %>%
+  filter(!(ST %in% c("AP", "VI", "PR")))
+
+rm(schools9495, schools1617)
+
+# NYC school districts are broken up on a more granular level, so here we're regrouping to a single
+# NYC district. Similarly, for Detroit, we're combining all Detroit schools, regardless of state 
+# or local control
+schools_raw <- schools_raw %>% 
+  mutate(LEA_NAME = ifelse(grepl("new york city geographic district ", LEA_NAME), "new york city public schools", 
+                           ifelse(LEA_NAME %in% c("detroit public schools community district", "education achievement authority of michigan"),
+                                  "detroit city school district", LEA_NAME))) %>%
+  mutate(LEAID = ifelse(LEA_NAME == "new york city public schools", "3620580", 
+                        ifelse(LEA_NAME == "detroit city school district", "2612000", LEAID)))
+
+# remove districts from calculation that have at least 10 percent of students not specified
+over10_ns <- schools_raw %>% group_by(LEAID, SCHOOL_YEAR) %>% 
+  summarise(districtNotSpec = sum(Not_spec), districtTotal = sum(Total)) %>% 
+  mutate(districtNotSpecPercent = districtNotSpec / districtTotal) %>% 
+  filter(districtNotSpecPercent > 0.1) 
+
+schools <- anti_join(schools_raw, over10_ns, by = c("LEAID","SCHOOL_YEAR")) %>%
+  mutate(Total = ifelse(is.na(TotalKnownRace), Total, TotalKnownRace)) %>%
+  select(-TotalKnownRace, -Not_spec, -Nonwhite)
+
+### Calculate diversity breaks at 75 and 90 ###
+### Calculate diversity breaks at 75 and 90 ###
+### Calculate diversity breaks at 75 and 90 ###
+district_sum <- schools %>%
+  group_by(SCHOOL_YEAR, LEAID) %>%
+  summarise_if(is.numeric, list(~sum(.))) %>%
+# NHPI is not a racial category in 1995 so in 2017 we're combining NHPI with Asian
+# to create consistency across the time period
+  mutate(Asian = ifelse(SCHOOL_YEAR == "2016-2017", NHPI + Asian, Asian)) %>%
+  select(-NHPI) %>%
+  mutate_at(vars(AIAN:Multi), list(~((./Total)*100))) %>%
+  mutate(max_race = pmax(AIAN, Asian, Black, Hispanic, White, Multi, na.rm = TRUE),
+         diverse = ifelse(max_race >= 90, "Extremely undiverse",
+                             ifelse(max_race >= 75, "Undiverse", "Diverse")),
+         diverse = factor(diverse, levels = c("Diverse", "Undiverse", "Extremely undiverse"))) %>%
+  select(-max_race)
+
+# diverse breakdown
+district_sum %>%
+  group_by(SCHOOL_YEAR, diverse) %>%
+  summarise(students = sum(Total), districts = n()) %>%
+  group_by(SCHOOL_YEAR) %>%
+  mutate(propStudents = students / sum(students),
+         propN = districts / sum(districts))
+
+# districts are not necessarily in both time periods. Here we require it and look at the flow of districts
+diverse_years <- district_sum %>%
+  select(LEAID, SCHOOL_YEAR, diverse) %>%
+  ungroup() %>%
+  mutate(SCHOOL_YEAR = ifelse(SCHOOL_YEAR == "1994-1995", "Y95", "Y17"),
+         diverse = ifelse(diverse == "Diverse", "diverse", "not diverse")) %>%
+  spread(SCHOOL_YEAR, diverse) %>%
+  left_join(district_sum %>% ungroup() %>% filter(SCHOOL_YEAR == "2016-2017") %>% select(LEAID, Total),
+            by="LEAID") 
+
+# district flow breakdown
+diverse_years %>%
+  drop_na() %>%
+  group_by(Y95, Y17) %>%
+  summarise(students = sum(Total), 
+            districts = n()) %>%
+  ungroup() %>%
+  mutate(propStudents = students / sum(students),
+         propDistricts = districts / sum(districts))
+  
+
+### Integration ###
+### Integration ###
+### Integration ###
+# only district where each school reports race for at least 90% of students
+over10_ns <- schools_raw %>%
+  mutate(no_spec_percent = Not_spec / Total) %>% 
+  filter(no_spec_percent > 0.1)
+
+schools <- anti_join(schools_raw, over10_ns, by = c("LEAID", "SCHOOL_YEAR")) %>%
+  mutate(Total = ifelse(is.na(TotalKnownRace), Total, TotalKnownRace)) %>%
+  select(-TotalKnownRace) %>%
+  filter(Total > 0)
+
+# rule: districts require at least six schools and 1,000 students to be able to integrate
+# more than five schools
+multiple_schools <- schools %>%
+  group_by(LEAID, SCHOOL_YEAR) %>%
+  count() %>%
+  filter(n <= 5)
+
+schools <- anti_join(schools, multiple_schools, by=c("LEAID", "SCHOOL_YEAR"))
+
+# at least 1K students
+district_1k <- schools %>%
+  group_by(LEAID, SCHOOL_YEAR) %>%
+  summarise(district_Total = sum(Total)) %>%
+  filter(district_Total <= 1000) %>%
+  select(LEAID, SCHOOL_YEAR)
+
+schools <- anti_join(schools, district_1k, by=c("LEAID", "SCHOOL_YEAR"))
+
+# URM = under-represented minority, defined as black and hispanic students for this analysis
+# unifying Asian as Asian and NHPI
+schools <- schools %>%
+  mutate(URM = Black + Hispanic,
+        Asian = ifelse(SCHOOL_YEAR == "2016-2017", Asian + NHPI, Asian)) %>%
+  select(-NHPI)
+
+rm(over10_ns, multiple_schools, district_1k)
+
+# calculate variance ratio for integration
+# variance ratio definition - also called the correlation ratio - can be found here:  https://www.census.gov/topics/housing/housing-patterns/guidance/appendix-b.html
+districts <- schools %>% 
+  group_by(LEAID, SCHOOL_YEAR) %>% 
+  summarise_at(vars(AIAN:URM),sum) %>%
+  rename_at(vars(AIAN:URM), funs(paste0("d_", .))) %>%
+  mutate_at(vars(d_AIAN:d_URM), .funs = list(prop = ~ round((. / d_Total)* 100, 2))) %>%
+  replace(is.na(.), 0)
+
+seg_calc <- left_join(districts, schools, by=c("LEAID","SCHOOL_YEAR")) 
+
+seg_calc <- seg_calc %>% 
+  mutate(iso_hb = (URM / d_URM) * (URM / Total))
+
+variance <- seg_calc %>%
+  group_by(LEAID, SCHOOL_YEAR, d_Black, d_Hispanic, d_Total) %>%
+  summarise(iso = sum(iso_hb),
+            schools = n()) %>%
+  mutate(min_prop = (d_Black + d_Hispanic)/d_Total,
+         var_top = iso - min_prop,
+         var_bottom = 1 - min_prop,
+         variance = var_top / var_bottom) %>%
+  # districts need to have between 5 and 95% population of URM in order to receive a variance score
+  filter(min_prop > 0.05 & min_prop < .95) %>%
+  ungroup() %>%
+  select(LEAID, SCHOOL_YEAR, variance)
+
+### all together now ###
+### all together now ###
+### all together now ###
+
+#make base district file
+district_name <- schools_raw %>% 
+  distinct(LEAID, LEA_NAME, SCHOOL_YEAR, .keep_all = TRUE) %>%
+  group_by(LEAID) %>%
+  arrange(LEAID, desc(SCHOOL_YEAR)) %>%
+  filter(row_number()==1) %>%
+  select(LEAID, LEA_NAME, ST, d_Locale_Txt) 
+
+div_int <- left_join(district_sum, variance, by=c("LEAID", "SCHOOL_YEAR"))
+
+div_int17 <- div_int %>% filter(SCHOOL_YEAR=="2016-2017" & diverse == "Diverse")
+
+# use jenks breaks to classify variance score into integration groups
+classIntervals(div_int17$variance, 3, style = "jenks")
+
+div_int <- div_int %>% 
+  # only diverse districts are able to integrate
+  mutate(variance = ifelse(diverse != "Diverse", NA, variance),
+         # creating integration groups based off jenks breaks
+         int_group = ifelse(variance < 0.07864432, "highly integrated", 
+                                 ifelse(variance < 0.2113438, "somewhat integrated", "not integrated")))
+
+final <- left_join(district_name, div_int, by = "LEAID")
+
+# count of districts by diversity and integration
+final %>%
+  group_by(SCHOOL_YEAR, diverse, int_group) %>%
+  summarise(students = sum(Total)) %>%
+  group_by(SCHOOL_YEAR) %>%
+  mutate(prop = round((students  / sum(students))*100, 2)) 
+```
