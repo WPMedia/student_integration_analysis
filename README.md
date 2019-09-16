@@ -8,7 +8,7 @@ More students attend schools with children of different races than ever before, 
 
 # About the folders in this repo
 
-* **[output_data](output_data)** - Output data file that includes the following for school districts during the 1994-1995 and 2016-2017 school years:
+* **[output_data](https://github.com/WPMedia/student_integration_analysis/tree/master/output%20data)** - Output data file that includes the following for school districts during the 1994-1995 and 2016-2017 school years:
     - leaid: unique school district identifier
     - lea_name: school district name
     - st: state of school district
@@ -19,7 +19,7 @@ More students attend schools with children of different races than ever before, 
     - variance: the variance ratio
     - int_group: the level of integration, defined as "Highly integated", "Somewhat integrated" and "Not integrated"
 
-* **[analysis](analysis)** - R Markdown file that generates summary tables and output file 
+* **[analysis](https://github.com/WPMedia/student_integration_analysis/tree/master/analysis)** - R Markdown file that generates summary tables and output file 
 
 # Source data
 
