@@ -27,3 +27,7 @@ This data predominantly relies on the [Common Core of Data](https://nces.ed.gov/
 
 
 Additional details for this analysis can be found in the [methdology section](https://www.washingtonpost.com/graphics/2019/local/school-diversity-data/#methodology) of the story. 
+
+# Guidelines for using data
+
+If you publish an online story, graphic, map or other piece of journalism based on this data set, please credit The Washington Post, link to the [original source](https://www.washingtonpost.com/graphics/2019/local/school-diversity-data/), and [send us an email](mailto:maria.sanchezdiez@washpost.com) when you’ve hit publish. We want to learn what you discover and will attempt to link to your work as part of cataloguing the impact of this project.
